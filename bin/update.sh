@@ -7,6 +7,10 @@ if [ -z "$version" ]; then
   exit
 fi
 
+sha=$(cd .. && git rev-parse HEAD)
 (cd .. && npm run dist)
-cd ../dist/*.* ./
-find . -name *.json -exec perl -pi -e 's/VERSION_STRING_PLACEHOLDER/$version/g' {} \;
+
+cp ../dist/*.* . \
+  && find . -name '*.json' -exec perl -pi -e "s/VERSION_STRING_PLACEHOLDER/$version/g" {} \; \
+  && git ci -m "$sha" -a \
+  && git tag "$version"
