@@ -178,7 +178,7 @@ define("activemodel-adapter/system/active_model_adapter",
         https://tools.ietf.org/html/rfc4918#section-11.2
 
         @method ajaxError
-        @param jqXHR
+        @param {Object} jqXHR
         @return error
       */
       ajaxError: function(jqXHR) {
@@ -367,7 +367,7 @@ define("activemodel-adapter/system/active_model_serializer",
         @method serializePolymorphicType
         @param {DS.Model} record
         @param {Object} json
-        @param relationship
+        @param {Object} relationship
       */
       serializePolymorphicType: function(record, json, relationship) {
         var key = relationship.key;
@@ -1172,6 +1172,9 @@ define("ember-data/adapters/rest_adapter",
 
         will also send a request to: `GET /comments?ids[]=1&ids[]=2`
 
+        Note: Requests coalescing rely on URL building strategy. So if you override `buildUrl` in your app
+        `groupRecordsForFindMany` more likely should be overriden as well in order for coalescing to work.
+
         @property coalesceFindRequests
         @type {boolean}
       */
@@ -1714,9 +1717,9 @@ define("ember-data/adapters/rest_adapter",
         2. Your API might return errors as successful responses with status code
         200 and an Errors text or object. You can return a DS.InvalidError from
         this hook and it will automatically reject the promise and put your record
-        into the invald state.
+        into the invalid state.
 
-        @method ajaxError
+        @method ajaxSuccess
         @param  {Object} jqXHR
         @param  {Object} jsonPayload
         @return {Object} jqXHR
@@ -1834,11 +1837,11 @@ define("ember-data/core",
       /**
         @property VERSION
         @type String
-        @default '1.0.0-beta.11+canary.4e51ded433'
+        @default '1.0.0-beta.12-canary'
         @static
       */
       DS = Ember.Namespace.create({
-        VERSION: '1.0.0-beta.11+canary.4e51ded433'
+        VERSION: '1.0.0-beta.12-canary'
       });
 
       if (Ember.libraries) {
@@ -1957,7 +1960,8 @@ define("ember-data/ext/date",
 
     /**
       @method parse
-      @param date
+      @param {Date} date
+      @return {Number} timestamp
     */
     Ember.Date.parse = function (date) {
         var timestamp, struct, minutesOffset = 0;
@@ -3677,7 +3681,7 @@ define("ember-data/serializers/rest_serializer",
       @namespace DS
       @extends DS.JSONSerializer
     */
-    __exports__["default"] = JSONSerializer.extend({
+    var RESTSerializer = JSONSerializer.extend({
       /**
         If you want to do normalizations specific to some part of the payload, you
         can specify those under `normalizeHash`.
@@ -3890,6 +3894,10 @@ define("ember-data/serializers/rest_serializer",
 
         for (var prop in payload) {
           var typeName  = this.typeForRoot(prop);
+          if (!store.modelFactoryFor(typeName)){
+            Ember.warn(this.warnMessageNoModelForKey(prop, typeName), false);
+            continue;
+          }
           var type = store.modelFor(typeName);
           var isPrimary = type.typeKey === primaryTypeName;
           var value = payload[prop];
@@ -4043,6 +4051,10 @@ define("ember-data/serializers/rest_serializer",
           }
 
           var typeName = this.typeForRoot(typeKey);
+          if (!store.modelFactoryFor(typeName)) {
+            Ember.warn(this.warnMessageNoModelForKey(prop, typeName), false);
+            continue;
+          }
           var type = store.modelFor(typeName);
           var typeSerializer = store.serializerFor(type);
           var isPrimary = (!forcedSecondary && (type.typeKey === primaryTypeName));
@@ -4098,6 +4110,10 @@ define("ember-data/serializers/rest_serializer",
 
         for (var prop in payload) {
           var typeName = this.typeForRoot(prop);
+          if (!store.modelFactoryFor(typeName, prop)){
+            Ember.warn(this.warnMessageNoModelForKey(prop, typeName), false);
+            continue;
+          }
           var type = store.modelFor(typeName);
           var typeSerializer = store.serializerFor(type);
 
@@ -4298,8 +4314,9 @@ define("ember-data/serializers/rest_serializer",
         ```
 
         @method serialize
-        @param record
-        @param options
+        @param {subclass of DS.Model} record
+        @param {Object} options
+        @return {Object} json
       */
       serialize: function(record, options) {
         return this._super.apply(this, arguments);
@@ -4352,6 +4369,16 @@ define("ember-data/serializers/rest_serializer",
         }
       }
     });
+
+    Ember.runInDebug(function(){
+      RESTSerializer.reopen({
+        warnMessageNoModelForKey: function(prop, typeKey){
+          return 'Encountered "' + prop + '" in payload, but no model was found for model name "' + typeKey + '" (resolved model name using ' + this.constructor.toString() + '.typeForRoot("' + prop + '"))';
+        }
+      });
+    });
+
+    __exports__["default"] = RESTSerializer;
   });
 define("ember-data/setup-container",
   ["ember-data/initializers/store","ember-data/initializers/transforms","ember-data/initializers/store_injections","ember-data/initializers/data_adapter","activemodel-adapter/setup-container","exports"],
@@ -6933,15 +6960,32 @@ define("ember-data/system/model/model",
 
         @method trigger
         @private
-        @param name
+        @param {String} name
       */
-      trigger: function(name) {
-        Ember.tryInvoke(this, name, [].slice.call(arguments, 1));
+      trigger: function() {
+        var length = arguments.length;
+        var args = new Array(length - 1);
+        var name = arguments[0];
+
+        for (var i = 1; i < length; i++ ){
+          args[i - 1] = arguments[i];
+        }
+
+        Ember.tryInvoke(this, name, args);
         this._super.apply(this, arguments);
       },
 
       triggerLater: function() {
-        if (this._deferredTriggers.push(arguments) !== 1) { return; }
+        var length = arguments.length;
+        var args = new Array(length);
+
+        for (var i = 0; i < length; i++ ){
+          args[i] = arguments[i];
+        }
+
+        if (this._deferredTriggers.push(args) !== 1) {
+          return;
+        }
         Ember.run.schedule('actions', this, '_triggerDeferredTriggers');
       },
 
@@ -7904,6 +7948,8 @@ define("ember-data/system/record_array_manager",
         recordArrays.forEach(function(array){
           array.removeRecord(record);
         });
+
+        record._recordArrays = null;
       },
 
       _recordWasChanged: function (record) {
@@ -7968,9 +8014,9 @@ define("ember-data/system/record_array_manager",
         method is invoked when the filter is created in th first place.
 
         @method updateFilter
-        @param array
-        @param type
-        @param filter
+        @param {Array} array
+        @param {String} type
+        @param {Function} filter
       */
       updateFilter: function(array, type, filter) {
         var typeMap = this.store.typeMapFor(type);
@@ -8851,9 +8897,9 @@ define("ember-data/system/relationships/ext",
         property returned by `DS.belongsTo` as the value.
 
         @method didDefineProperty
-        @param proto
-        @param key
-        @param value
+        @param {Object} proto
+        @param {String} key
+        @param {Ember.ComputedProperty} value
       */
       didDefineProperty: function(proto, key, value) {
         // Check if the value being set is a computed property.
@@ -11026,7 +11072,7 @@ define("ember-data/system/store",
 
         @method typeMapFor
         @private
-        @param type
+        @param {subclass of DS.Model} type
         @return {Object} typeMap
       */
       typeMapFor: function(type) {
@@ -11087,7 +11133,7 @@ define("ember-data/system/store",
         var factory;
 
         if (typeof key === 'string') {
-          factory = this.container.lookupFactory('model:' + key);
+          factory = this.modelFactoryFor(key);
           if (!factory) {
             throw new Ember.Error("No model was found for '" + key + "'");
           }
@@ -11102,6 +11148,10 @@ define("ember-data/system/store",
 
         factory.store = this;
         return factory;
+      },
+
+      modelFactoryFor: function(key){
+        return this.container.lookupFactory('model:' + key);
       },
 
       /**
@@ -11847,8 +11897,8 @@ define("ember-data/transforms/base",
         ```
 
         @method serialize
-        @param deserialized The deserialized value
-        @return The serialized value
+        @param {mixed} deserialized The deserialized value
+        @return {mixed} The serialized value
       */
       serialize: Ember.required(),
 
@@ -11865,8 +11915,8 @@ define("ember-data/transforms/base",
         ```
 
         @method deserialize
-        @param serialized The serialized value
-        @return The deserialized value
+        @param {mixed} serialized The serialized value
+        @return {mixed} The deserialized value
       */
       deserialize: Ember.required()
     });

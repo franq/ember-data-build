@@ -1,6 +1,6 @@
 {
   "name": "ember-data",
-  "version": "1.0.0-beta.10a",
+  "version": "v1.0.0-beta.11a",
   "main": "ember-data.js",
   "dependencies": {
     "ember": ">= 1.0.0"
