@@ -161,7 +161,6 @@ define("activemodel-adapter/system/active_model_adapter",
       @module ember-data
     */
 
-    var forEach = Ember.EnumerableUtils.forEach;
     var decamelize = Ember.String.decamelize,
         underscore = Ember.String.underscore;
 
@@ -171,7 +170,7 @@ define("activemodel-adapter/system/active_model_adapter",
       It has been designed to work out of the box with the
       [active_model_serializers](http://github.com/rails-api/active_model_serializers)
       Ruby gem. This Adapter expects specific settings using ActiveModel::Serializers,
-      `embed :ids, include: true` which sideloads the records.
+      `embed :ids, embed_in_root: true` which sideloads the records.
 
       This adapter extends the DS.RESTAdapter by making consistent use of the camelization,
       decamelization and pluralization methods to normalize the serialized JSON into a
@@ -297,18 +296,7 @@ define("activemodel-adapter/system/active_model_adapter",
         var error = this._super(jqXHR);
 
         if (jqXHR && jqXHR.status === 422) {
-          var response = Ember.$.parseJSON(jqXHR.responseText),
-              errors = {};
-
-          if (response.errors !== undefined) {
-            var jsonErrors = response.errors;
-
-            forEach(Ember.keys(jsonErrors), function(key) {
-              errors[Ember.String.camelize(key)] = jsonErrors[key];
-            });
-          }
-
-          return new InvalidError(errors);
+          return new InvalidError(Ember.$.parseJSON(jqXHR.responseText));
         } else {
           return error;
         }
@@ -339,7 +327,7 @@ define("activemodel-adapter/system/active_model_serializer",
       It has been designed to work out of the box with the
       [active_model_serializers](http://github.com/rails-api/active_model_serializers)
       Ruby gem. This Serializer expects specific settings using ActiveModel::Serializers,
-      `embed :ids, include: true` which sideloads the records.
+      `embed :ids, embed_in_root: true` which sideloads the records.
 
       This serializer extends the DS.RESTSerializer by making consistent
       use of the camelization, decamelization and pluralization methods to
@@ -1656,7 +1644,7 @@ define("ember-data/adapters/rest_adapter",
       },
 
       _stripIDFromURL: function(store, record) {
-        var type = store.modelFor(record);
+        var type = record.constructor;
         var url = this.buildURL(type.typeKey, record.get('id'), record);
 
         var expandedURL = url.split('/');
@@ -1672,6 +1660,11 @@ define("ember-data/adapters/rest_adapter",
 
         return expandedURL.join('/');
       },
+
+      /**
+        http://stackoverflow.com/questions/417142/what-is-the-maximum-length-of-a-url-in-different-browsers
+      */
+      maxUrlLength: 2048,
 
       /**
         Organize records into groups, each of which is to be passed to separate
@@ -1690,6 +1683,7 @@ define("ember-data/adapters/rest_adapter",
         and `/posts/2/comments/3`
 
         @method groupRecordsForFindMany
+        @param {DS.Store} store
         @param {Array} records
         @return {Array}  an array of arrays of records, each of which is to be
                           loaded separately by `findMany`.
@@ -1697,19 +1691,20 @@ define("ember-data/adapters/rest_adapter",
       groupRecordsForFindMany: function (store, records) {
         var groups = MapWithDefault.create({defaultValue: function(){return [];}});
         var adapter = this;
+        var maxUrlLength = this.maxUrlLength;
 
         forEach.call(records, function(record){
           var baseUrl = adapter._stripIDFromURL(store, record);
           groups.get(baseUrl).push(record);
         });
 
-        function splitGroupToFitInUrl(group, maxUrlLength) {
+        function splitGroupToFitInUrl(group, maxUrlLength, paramNameLength) {
           var baseUrl = adapter._stripIDFromURL(store, group[0]);
           var idsSize = 0;
           var splitGroups = [[]];
 
           forEach.call(group, function(record) {
-            var additionalLength = '&ids[]='.length + record.get('id.length');
+            var additionalLength = encodeURIComponent(record.get('id')).length + paramNameLength;
             if (baseUrl.length + idsSize + additionalLength >= maxUrlLength) {
               idsSize = 0;
               splitGroups.push([]);
@@ -1726,9 +1721,8 @@ define("ember-data/adapters/rest_adapter",
 
         var groupsArray = [];
         groups.forEach(function(group, key){
-          // http://stackoverflow.com/questions/417142/what-is-the-maximum-length-of-a-url-in-different-browsers
-          var maxUrlLength = 2048;
-          var splitGroups = splitGroupToFitInUrl(group, maxUrlLength);
+          var paramNameLength = '&ids%5B%5D='.length;
+          var splitGroups = splitGroupToFitInUrl(group, maxUrlLength, paramNameLength);
 
           forEach.call(splitGroups, function(splitGroup) {
             groupsArray.push(splitGroup);
@@ -1768,11 +1762,17 @@ define("ember-data/adapters/rest_adapter",
       },
 
       /**
-        Takes an ajax response, and returns a relevant error.
+        Takes an ajax response, and returns an error payload.
 
         Returning a `DS.InvalidError` from this method will cause the
         record to transition into the `invalid` state and make the
         `errors` object available on the record.
+
+        This function should return the entire payload as received from the
+        server.  Error object extraction and normalization of model errors
+        should be performed by `extractErrors` on the serializer.
+
+        Example
 
         ```javascript
         App.ApplicationAdapter = DS.RESTAdapter.extend({
@@ -1780,7 +1780,7 @@ define("ember-data/adapters/rest_adapter",
             var error = this._super(jqXHR);
 
             if (jqXHR && jqXHR.status === 422) {
-              var jsonErrors = Ember.$.parseJSON(jqXHR.responseText)["errors"];
+              var jsonErrors = Ember.$.parseJSON(jqXHR.responseText);
 
               return new DS.InvalidError(jsonErrors);
             } else {
@@ -2954,6 +2954,16 @@ define("ember-data/serializers/json_serializer",
       },
 
       /**
+        @method normalizeErrors
+        @private
+      */
+      normalizeErrors: function(type, hash) {
+        this.normalizeId(hash);
+        this.normalizeAttributes(type, hash);
+        this.normalizeRelationships(type, hash);
+      },
+
+      /**
         Looks up the property key that was set by the custom `attr` mapping
         passed to the serializer.
 
@@ -3661,6 +3671,41 @@ define("ember-data/serializers/json_serializer",
           store.metaForType(type, payload.meta);
           delete payload.meta;
         }
+      },
+
+      /**
+        `extractErrors` is used to extract model errors when a call is made
+        to `DS.Model#save` which fails with an InvalidError`. By default
+        Ember Data expects error information to be located on the `errors`
+        property of the payload object.
+
+        Example
+
+        ```javascript
+        App.PostSerializer = DS.JSONSerializer.extend({
+          extractErrors: function(store, type, payload, id) {
+            if (payload && typeof payload === 'object' && payload._problems) {
+              payload = payload._problems;
+              this.normalizeErrors(type, payload);
+            }
+            return payload;
+          }
+        });
+        ```
+
+        @method extractErrors
+        @param {DS.Store} store
+        @param {subclass of DS.Model} type
+        @param {Object} payload
+        @param {String or Number} id
+        @return {Object} json The deserialized errors
+      */
+      extractErrors: function(store, type, payload, id) {
+        if (payload && typeof payload === 'object' && payload.errors) {
+          payload = payload.errors;
+          this.normalizeErrors(type, payload);
+        }
+        return payload;
       },
 
       /**
@@ -4525,6 +4570,10 @@ define("ember-data/system/adapter",
       transition to the `invalid` state and the errors will be set to the
       `errors` property on the record.
 
+      This function should return the entire payload as received from the
+      server.  Error object extraction and normalization of model errors
+      should be performed by `extractErrors` on the serializer.
+
       Example
 
       ```javascript
@@ -4533,7 +4582,7 @@ define("ember-data/system/adapter",
           var error = this._super(jqXHR);
 
           if (jqXHR && jqXHR.status === 422) {
-            var jsonErrors = Ember.$.parseJSON(jqXHR.responseText)["errors"];
+            var jsonErrors = Ember.$.parseJSON(jqXHR.responseText);
             return new DS.InvalidError(jsonErrors);
           } else {
             return error;
@@ -4948,6 +4997,7 @@ define("ember-data/system/adapter",
         The default implementation returns the records as a single group.
 
         @method groupRecordsForFindMany
+        @param {DS.Store} store
         @param {Array} records
         @return {Array}  an array of arrays of records, each of which is to be
                           loaded separately by `findMany`.
@@ -5666,7 +5716,7 @@ define("ember-data/system/model/errors",
       `DS.Errors`. This can be used to display validation error
       messages returned from the server when a `record.save()` rejects.
       This works automatically with `DS.ActiveModelAdapter`, but you
-      can implement [ajaxError](api/data/classes/DS.RESTAdapter.html#method_ajaxError)
+      can implement [ajaxError](/api/data/classes/DS.RESTAdapter.html#method_ajaxError)
       in other adapters as well.
 
       For Example, if you had an `User` model that looked like this:
@@ -6965,7 +7015,9 @@ define("ember-data/system/model/model",
         App.ModelViewRoute = Ember.Route.extend({
           actions: {
             reload: function() {
-              this.controller.get('model').reload();
+              this.controller.get('model').reload().then(function(model) {
+                // do something with the reloaded model
+              });
             }
           }
         });
@@ -7528,6 +7580,7 @@ define("ember-data/system/model/states",
     });
 
     createdState.uncommitted.rolledBack = function(record) {
+      record.clearRelationships();
       record.transitionTo('deleted.saved');
     };
 
@@ -7933,12 +7986,18 @@ define("ember-data/system/promise_proxies",
       to the underlying manyArray.
       Right now we proxy:
         `reload()`
+        `createRecord()`
     */
 
     var PromiseManyArray = PromiseArray.extend({
       reload: function() {
         //I don't think this should ever happen right now, but worth guarding if we refactor the async relationships
                 return get(this, 'content').reload();
+      },
+
+      createRecord: function() {
+        var content = get(this, 'content');
+        return content.createRecord.apply(content, arguments);
       }
     });
 
@@ -8482,17 +8541,19 @@ define("ember-data/system/record_arrays/many_array",
       */
       isPolymorphic: false,
 
-      // LOADING STATE
+      /**
+        The loading state of this array
 
+        @property {Boolean} isLoaded
+      */
       isLoaded: false,
 
        /**
          The relationship which manages this array.
 
-         @property {DS.Model} owner
+         @property {ManyRelationship} relationship
          @private
        */
-
       relationship: null,
 
 
@@ -8558,7 +8619,7 @@ define("ember-data/system/record_arrays/many_array",
         var record;
 
         
-        record = store.createRecord.call(store, type, hash);
+        record = store.createRecord(type, hash);
         this.pushObject(record);
 
         return record;
@@ -9043,7 +9104,7 @@ define("ember-data/system/relationships/ext",
         return Object.create(null);
       }),
 
-      /*
+      /**
         Find the relationship which is the inverse of the one asked for.
 
         For example, if you define models like this:
@@ -9371,7 +9432,7 @@ define("ember-data/system/relationships/ext",
         });
 
         var fields = Ember.get(App.Blog, 'fields');
-        fields.forEach(function(field, kind) {
+        fields.forEach(function(kind, field) {
           console.log(field, kind);
         });
 
@@ -9629,7 +9690,6 @@ define("ember-data/system/relationships/relationship",
       this.key = relationshipMeta.key;
       this.inverseKey = inverseKey;
       this.record = record;
-      this.key = relationshipMeta.key;
       this.isAsync = relationshipMeta.options.async;
       this.relationshipMeta = relationshipMeta;
       //This probably breaks for polymorphic relationship in complex scenarios, due to
@@ -9729,7 +9789,7 @@ define("ember-data/system/relationships/relationship",
       },
 
       updateLink: function(link) {
-        if (link !== this.link) {
+                if (link !== this.link) {
           this.link = link;
           this.linkPromise = null;
           this.record.notifyPropertyChange(this.key);
@@ -9864,7 +9924,9 @@ define("ember-data/system/relationships/relationship",
         });
       } else {
           
-        this.manyArray.set('isLoaded', true);
+        if (!this.manyArray.get('isDestroyed')) {
+          this.manyArray.set('isLoaded', true);
+        }
         return this.manyArray;
      }
     };
@@ -11407,7 +11469,6 @@ define("ember-data/system/store",
         @return {DS.Model} the record that was updated.
       */
       update: function(type, data) {
-        
         return this.push(type, data, true);
       },
 
@@ -11612,7 +11673,7 @@ define("ember-data/system/store",
       if (isNone(id) || id instanceof Model) {
         return;
       }
-
+      
       var type;
 
       if (typeof id === 'number' || typeof id === 'string') {
@@ -11633,10 +11694,11 @@ define("ember-data/system/store",
     }
 
     function deserializeRecordIds(store, data, key, relationship, ids) {
-      if (!Ember.isArray(ids)) {
+      if (isNone(ids)) {
         return;
       }
-      for (var i=0, l=ids.length; i<l; i++) {
+
+            for (var i=0, l=ids.length; i<l; i++) {
         deserializeRecordId(store, ids, i, relationship, ids[i]);
       }
     }
@@ -11831,7 +11893,9 @@ define("ember-data/system/store",
         return record;
       }, function(reason) {
         if (reason instanceof InvalidError) {
-          store.recordWasInvalid(record, reason.errors);
+          var errors = serializer.extractErrors(store, type, reason.errors, get(record, 'id'));
+          store.recordWasInvalid(record, errors);
+          reason = new InvalidError(errors);
         } else {
           store.recordWasError(record, reason);
         }
