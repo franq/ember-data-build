@@ -6,6 +6,7 @@ Clone this repo into the root of an ember-data clone:
 ```
 git clone git@github.com:emberjs/data.git ember-data \
   && cd ember-data \
+  && npm install \
   && git clone git@github.com:franq/ember-data-build.git builds
 ```
 
