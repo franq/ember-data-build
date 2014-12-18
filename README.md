@@ -14,7 +14,7 @@ When you want to create a custom build:
 
 ```
 # choose an appropriate version number
-version="v1.0.0-beta.12b"
+version="1.0.0-beta.12b"
 cd builds \
   && ./bin/update.sh $version \
   && git push --tags

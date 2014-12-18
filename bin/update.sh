@@ -11,5 +11,5 @@ sha=$(cd .. && git rev-parse HEAD)
 (cd .. && npm run dist) \
   && cp ../dist/*.* . \
   && find . -name '*.json' -exec perl -pi -e "s/VERSION_STRING_PLACEHOLDER/$version/g" {} \; \
-  && git ci -m "$sha" -a \
-  && git tag "$version"
+  && git commit -m "$sha" -a \
+  && git tag "v$version"
