@@ -466,7 +466,6 @@
     /**
       @module ember-data
     */
-
     var ember$data$lib$adapters$fixture_adapter$$get = Ember.get;
     var ember$data$lib$adapters$fixture_adapter$$fmt = Ember.String.fmt;
     var ember$data$lib$adapters$fixture_adapter$$indexOf = Ember.EnumerableUtils.indexOf;
@@ -912,7 +911,7 @@
         will also send a request to: `GET /comments?ids[]=1&ids[]=2`
 
         Note: Requests coalescing rely on URL building strategy. So if you override `buildUrl` in your app
-        `groupRecordsForFindMany` more likely should be overriden as well in order for coalescing to work.
+        `groupRecordsForFindMany` more likely should be overridden as well in order for coalescing to work.
 
         @property coalesceFindRequests
         @type {boolean}
@@ -1446,9 +1445,14 @@
         @param  {Object} responseText
         @return {Object} jqXHR
       */
-      ajaxError: function(jqXHR, responseText) {
-        if (jqXHR && typeof jqXHR === 'object') {
+      ajaxError: function(jqXHR, responseText, errorThrown) {
+        var isObject = jqXHR !== null && typeof jqXHR === 'object';
+
+        if (isObject) {
           jqXHR.then = null;
+          if (!jqXHR.errorThrown) {
+            jqXHR.errorThrown = errorThrown;
+          }
         }
 
         return jqXHR;
@@ -1520,11 +1524,11 @@
           };
 
           hash.error = function(jqXHR, textStatus, errorThrown) {
-            Ember.run(null, reject, adapter.ajaxError(jqXHR, jqXHR.responseText));
+            Ember.run(null, reject, adapter.ajaxError(jqXHR, jqXHR.responseText, errorThrown));
           };
 
           Ember.$.ajax(hash);
-        }, "DS: RESTAdapter#ajax " + type + " to " + url);
+        }, 'DS: RESTAdapter#ajax ' + type + ' to ' + url);
       },
 
       /**
@@ -2169,7 +2173,7 @@
         @return error
       */
       ajaxError: function(jqXHR) {
-        var error = this._super(jqXHR);
+        var error = this._super.apply(this, arguments);
 
         if (jqXHR && jqXHR.status === 422) {
           return new ember$data$lib$system$adapter$$InvalidError(Ember.$.parseJSON(jqXHR.responseText));
@@ -2958,8 +2962,8 @@
 
       /**
         `extractCreateRecord` is a hook into the extract method used when a
-        call is made to `DS.Store#createRecord`. By default this method is
-        alias for [extractSave](#method_extractSave).
+        call is made to `DS.Model#save` and the record is new. By default
+        this method is alias for [extractSave](#method_extractSave).
 
         @method extractCreateRecord
         @param {DS.Store} store
@@ -2974,8 +2978,8 @@
       },
       /**
         `extractUpdateRecord` is a hook into the extract method used when
-        a call is made to `DS.Store#update`. By default this method is alias
-        for [extractSave](#method_extractSave).
+        a call is made to `DS.Model#save` and the record has been updated.
+        By default this method is alias for [extractSave](#method_extractSave).
 
         @method extractUpdateRecord
         @param {DS.Store} store
@@ -2990,8 +2994,8 @@
       },
       /**
         `extractDeleteRecord` is a hook into the extract method used when
-        a call is made to `DS.Store#deleteRecord`. By default this method is
-        alias for [extractSave](#method_extractSave).
+        a call is made to `DS.Model#save` and the record has been deleted.
+        By default this method is alias for [extractSave](#method_extractSave).
 
         @method extractDeleteRecord
         @param {DS.Store} store
@@ -3128,7 +3132,7 @@
         App.PostSerializer = DS.JSONSerializer.extend({
           extractMeta: function(store, type, payload) {
             if (payload && payload._pagination) {
-              store.metaForType(type, payload._pagination);
+              store.setMetadataFor(type, payload._pagination);
               delete payload._pagination;
             }
           }
@@ -3142,7 +3146,7 @@
       */
       extractMeta: function(store, type, payload) {
         if (payload && payload.meta) {
-          store.metaForType(type, payload.meta);
+          store.setMetadataFor(type, payload.meta);
           delete payload.meta;
         }
       },
@@ -4461,7 +4465,9 @@
     var ember$data$lib$system$promise_proxies$$PromiseManyArray = ember$data$lib$system$promise_proxies$$PromiseArray.extend({
       reload: function() {
         //I don't think this should ever happen right now, but worth guarding if we refactor the async relationships
-                return ember$data$lib$system$promise_proxies$$get(this, 'content').reload();
+                return ember$data$lib$system$promise_proxies$$PromiseManyArray.create({
+          promise: ember$data$lib$system$promise_proxies$$get(this, 'content').reload()
+        });
       },
 
       createRecord: ember$data$lib$system$promise_proxies$$proxyToContent('createRecord'),
@@ -4793,11 +4799,46 @@
 
     var ember$data$lib$system$record_arrays$many_array$$get = Ember.get, ember$data$lib$system$record_arrays$many_array$$set = Ember.set;
 
-    var ember$data$lib$system$record_arrays$many_array$$default = ember$data$lib$system$record_arrays$record_array$$default.extend({
+    var ember$data$lib$system$record_arrays$many_array$$default = Ember.Object.extend(Ember.MutableArray, Ember.Evented, {
       init: function() {
-        this._super.apply(this, arguments);
+        this.currentState = Ember.A([]);
+        this.diff = [];
       },
 
+      record: null,
+
+      canonicalState: null,
+      currentState: null,
+
+      diff: null,
+
+      length: 0,
+
+      objectAt: function(index) {
+        if (this.currentState[index]) {
+          return this.currentState[index];
+        } else {
+          return this.canonicalState[index];
+        }
+      },
+
+      flushCanonical: function() {
+        //TODO make this smarter, currently its plenty stupid
+        var toSet = this.canonicalState.slice(0);
+        //a hack for not removing new records
+        //TODO remove once we have proper diffing
+        var newRecords = this.currentState.filter(function(record) {
+          return record.get('isNew');
+        });
+        toSet = toSet.concat(newRecords);
+        this.arrayContentWillChange(0, this.length, this.length);
+        this.set('length', toSet.length);
+        this.currentState = toSet;
+        this.arrayContentDidChange(0, this.length, this.length);
+        //TODO Figure out to notify only on additions and maybe only if unloaded
+        this.relationship.notifyHasManyChanged();
+        this.record.updateRecordArrays();
+      },
       /**
         `true` if the relationship is polymorphic, `false` otherwise.
 
@@ -4821,7 +4862,48 @@
        */
       relationship: null,
 
+      internalReplace: function(idx, amt, objects) {
+        if (!objects) {
+          objects = [];
+        }
+        this.arrayContentWillChange(idx, 0, objects.length);
+        this.currentState.splice.apply(this.currentState, [idx, amt].concat(objects));
+        this.set('length', this.currentState.length);
+        this.arrayContentDidChange(idx, 0, objects.length);
+        if (objects){
+          //TODO(Igor) probably needed only for unloaded records
+          this.relationship.notifyHasManyChanged();
+        }
+        this.record.updateRecordArrays();
+      },
 
+      //TODO(Igor) optimize
+      internalRemoveRecords: function(records) {
+        var index;
+        for(var i=0; i < records.length; i++) {
+          index = this.currentState.indexOf(records[i]);
+          this.internalReplace(index, 1);
+        }
+      },
+
+      //TODO(Igor) optimize
+      internalAddRecords: function(records, idx) {
+        if (idx === undefined) {
+          idx = this.currentState.length;
+        }
+        this.internalReplace(idx, 0, records);
+      },
+
+      replace: function(idx, amt, objects) {
+        var records;
+        if (amt > 0){
+          records = this.currentState.slice(idx, idx+amt);
+          this.get('relationship').removeRecords(records);
+        }
+        if (objects){
+          this.get('relationship').addRecords(objects, idx);
+        }
+      },
       /**
         Used for async `hasMany` arrays
         to keep track of when they will resolve.
@@ -4852,16 +4934,6 @@
         }
       },
 
-      replaceContent: function(idx, amt, objects){
-        var records;
-        if (amt > 0){
-          records = ember$data$lib$system$record_arrays$many_array$$get(this, 'content').slice(idx, idx+amt);
-          this.get('relationship').removeRecords(records);
-        }
-        if (objects){
-          this.get('relationship').addRecords(objects, idx);
-        }
-      },
       /**
         @method reload
         @public
@@ -5029,31 +5101,6 @@
             this.updateRecordArray(array, filter, type, record);
           }
         }
-      },
-
-      /**
-        Create a `DS.ManyArray` for a type and list of record references, and index
-        the `ManyArray` under each reference. This allows us to efficiently remove
-        records from `ManyArray`s when they are deleted.
-
-        @method createManyArray
-        @param {Class} type
-        @param {Array} references
-        @return {DS.ManyArray}
-      */
-      createManyArray: function(type, records) {
-        var manyArray = ember$data$lib$system$record_arrays$many_array$$default.create({
-          type: type,
-          content: records,
-          store: this.store
-        });
-
-        ember$data$lib$system$record_array_manager$$forEach(records, function(record) {
-          var arrays = this.recordArraysForRecord(record);
-          arrays.add(manyArray);
-        }, this);
-
-        return manyArray;
       },
 
       /**
@@ -5671,7 +5718,6 @@
 
         loadedData: function(record) {
           record.transitionTo('loaded.created.uncommitted');
-          record.notifyPropertyChange('data');
         },
 
         pushedData: function(record) {
@@ -5961,7 +6007,8 @@
           email: 'invalidEmail'
         });
         user.save().catch(function(){
-          user.get('errors').errorsFor('email'); // ["Doesn't look like a valid email."]
+          user.get('errors').errorsFor('email'); // returns:
+          // [{attribute: "email", message: "Doesn't look like a valid email."}]
         });
         ```
 
@@ -6173,10 +6220,30 @@
       }
     });
 
-    var ember$data$lib$system$relationships$relationship$$forEach = Ember.EnumerableUtils.forEach;
+    function ember$data$lib$system$merge$$merge(original, updates) {
+      if (!updates || typeof updates !== 'object') {
+        return original;
+      }
 
-    var ember$data$lib$system$relationships$relationship$$Relationship = function(store, record, inverseKey, relationshipMeta) {
+      var props = Ember.keys(updates);
+      var prop;
+      var length = props.length;
+
+      for (var i = 0; i < length; i++) {
+        prop = props[i];
+        original[prop] = updates[prop];
+      }
+
+      return original;
+    }
+
+    var ember$data$lib$system$merge$$default = ember$data$lib$system$merge$$merge;
+
+    var ember$data$lib$system$relationships$state$relationship$$forEach = Ember.EnumerableUtils.forEach;
+
+    var ember$data$lib$system$relationships$state$relationship$$Relationship = function(store, record, inverseKey, relationshipMeta) {
       this.members = new ember$data$lib$system$map$$OrderedSet();
+      this.canonicalMembers = new ember$data$lib$system$map$$OrderedSet();
       this.store = store;
       this.key = relationshipMeta.key;
       this.inverseKey = inverseKey;
@@ -6186,19 +6253,22 @@
       //This probably breaks for polymorphic relationship in complex scenarios, due to
       //multiple possible typeKeys
       this.inverseKeyForImplicit = this.store.modelFor(this.record.constructor).typeKey + this.key;
-      //Cached promise when fetching the relationship from a link
       this.linkPromise = null;
     };
 
-    ember$data$lib$system$relationships$relationship$$Relationship.prototype = {
-      constructor: ember$data$lib$system$relationships$relationship$$Relationship,
+    ember$data$lib$system$relationships$state$relationship$$Relationship.prototype = {
+      constructor: ember$data$lib$system$relationships$state$relationship$$Relationship,
 
       destroy: Ember.K,
 
       clear: function() {
-        this.members.forEach(function(member) {
+        var members = this.members.list;
+        var member;
+
+        while (members.length > 0){
+          member = members[0];
           this.removeRecord(member);
-        }, this);
+        }
       },
 
       disconnect: function(){
@@ -6215,19 +6285,68 @@
 
       removeRecords: function(records){
         var self = this;
-        ember$data$lib$system$relationships$relationship$$forEach(records, function(record){
+        ember$data$lib$system$relationships$state$relationship$$forEach(records, function(record){
           self.removeRecord(record);
         });
       },
 
       addRecords: function(records, idx){
         var self = this;
-        ember$data$lib$system$relationships$relationship$$forEach(records, function(record){
+        ember$data$lib$system$relationships$state$relationship$$forEach(records, function(record){
           self.addRecord(record, idx);
           if (idx !== undefined) {
             idx++;
           }
         });
+      },
+
+      addCanonicalRecords: function(records, idx) {
+        for (var i=0; i<records.length; i++) {
+          if (idx !== undefined) {
+            this.addCanonicalRecord(records[i], i+idx);
+          } else {
+            this.addCanonicalRecord(records[i]);
+          }
+        }
+      },
+
+      addCanonicalRecord: function(record, idx) {
+        if (!this.canonicalMembers.has(record)) {
+          this.canonicalMembers.add(record);
+          if (this.inverseKey) {
+            record._relationships[this.inverseKey].addCanonicalRecord(this.record);
+          } else {
+            if (!record._implicitRelationships[this.inverseKeyForImplicit]) {
+              record._implicitRelationships[this.inverseKeyForImplicit] = new ember$data$lib$system$relationships$state$relationship$$Relationship(this.store, record, this.key,  {options:{}});
+            }
+            record._implicitRelationships[this.inverseKeyForImplicit].addCanonicalRecord(this.record);
+          }
+        }
+        this.flushCanonicalLater();
+      },
+
+      removeCanonicalRecords: function(records, idx) {
+        for (var i=0; i<records.length; i++) {
+          if (idx !== undefined) {
+            this.removeCanonicalRecord(records[i], i+idx);
+          } else {
+            this.removeCanonicalRecord(records[i]);
+          }
+        }
+      },
+
+      removeCanonicalRecord: function(record, idx) {
+        if (this.canonicalMembers.has(record)) {
+          this.removeCanonicalRecordFromOwn(record);
+          if (this.inverseKey) {
+            this.removeCanonicalRecordFromInverse(record);
+          } else {
+            if (record._implicitRelationships[this.inverseKeyForImplicit]) {
+              record._implicitRelationships[this.inverseKeyForImplicit].removeCanonicalRecord(this.record);
+            }
+          }
+        }
+        this.flushCanonicalLater();
       },
 
       addRecord: function(record, idx) {
@@ -6238,7 +6357,7 @@
             record._relationships[this.inverseKey].addRecord(this.record);
           } else {
             if (!record._implicitRelationships[this.inverseKeyForImplicit]) {
-              record._implicitRelationships[this.inverseKeyForImplicit] = new ember$data$lib$system$relationships$relationship$$Relationship(this.store, record, this.key,  {options:{}});
+              record._implicitRelationships[this.inverseKeyForImplicit] = new ember$data$lib$system$relationships$state$relationship$$Relationship(this.store, record, this.key,  {options:{}});
             }
             record._implicitRelationships[this.inverseKeyForImplicit].addRecord(this.record);
           }
@@ -6279,8 +6398,49 @@
         this.record.updateRecordArrays();
       },
 
+      removeCanonicalRecordFromInverse: function(record) {
+        var inverseRelationship = record._relationships[this.inverseKey];
+        //Need to check for existence, as the record might unloading at the moment
+        if (inverseRelationship) {
+          inverseRelationship.removeCanonicalRecordFromOwn(this.record);
+        }
+      },
+
+      removeCanonicalRecordFromOwn: function(record) {
+        this.canonicalMembers["delete"](record);
+        this.flushCanonicalLater();
+      },
+
+      flushCanonical: function() {
+        this.willSync = false;
+        //a hack for not removing new records
+        //TODO remove once we have proper diffing
+        var newRecords = [];
+        for (var i=0; i<this.members.list.length; i++) {
+          if (this.members.list[i].get('isNew')) {
+            newRecords.push(this.members.list[i]);
+          }
+        }
+        //TODO(Igor) make this less abysmally slow
+        this.members = this.canonicalMembers.copy();
+        for (i=0; i<newRecords.length; i++) {
+          this.members.add(newRecords[i]);
+        }
+      },
+
+      flushCanonicalLater: function() {
+        if (this.willSync) {
+          return;
+        }
+        this.willSync = true;
+        var self = this;
+        this.store._backburner.join(function() {
+          self.store._backburner.schedule('syncRelationships', self, self.flushCanonical);
+        });
+      },
+
       updateLink: function(link) {
-                if (link !== this.link) {
+                        if (link !== this.link) {
           this.link = link;
           this.linkPromise = null;
           this.record.notifyPropertyChange(this.key);
@@ -6300,40 +6460,100 @@
       },
 
       updateRecordsFromAdapter: function(records) {
+        //TODO(Igor) move this to a proper place
+        var self = this;
         //TODO Once we have adapter support, we need to handle updated and canonical changes
-        this.computeChanges(records);
+        self.computeChanges(records);
       },
 
       notifyRecordRelationshipAdded: Ember.K,
       notifyRecordRelationshipRemoved: Ember.K
     };
 
-    var ember$data$lib$system$relationships$relationship$$ManyRelationship = function(store, record, inverseKey, relationshipMeta) {
+
+
+
+    var ember$data$lib$system$relationships$state$relationship$$default = ember$data$lib$system$relationships$state$relationship$$Relationship;
+
+    var ember$data$lib$system$relationships$state$has_many$$ManyRelationship = function(store, record, inverseKey, relationshipMeta) {
       this._super$constructor(store, record, inverseKey, relationshipMeta);
       this.belongsToType = relationshipMeta.type;
-      this.manyArray = store.recordArrayManager.createManyArray(this.belongsToType, Ember.A());
-      this.manyArray.relationship = this;
+      this.canonicalState = [];
+      this.manyArray = ember$data$lib$system$record_arrays$many_array$$default.create({ canonicalState:this.canonicalState, store:this.store, relationship:this, type:this.belongsToType, record:record});
       this.isPolymorphic = relationshipMeta.options.polymorphic;
       this.manyArray.isPolymorphic = this.isPolymorphic;
     };
 
-    ember$data$lib$system$relationships$relationship$$ManyRelationship.prototype = Ember.create(ember$data$lib$system$relationships$relationship$$Relationship.prototype);
-    ember$data$lib$system$relationships$relationship$$ManyRelationship.prototype.constructor = ember$data$lib$system$relationships$relationship$$ManyRelationship;
-    ember$data$lib$system$relationships$relationship$$ManyRelationship.prototype._super$constructor = ember$data$lib$system$relationships$relationship$$Relationship;
+    ember$data$lib$system$relationships$state$has_many$$ManyRelationship.prototype = Ember.create(ember$data$lib$system$relationships$state$relationship$$default.prototype);
+    ember$data$lib$system$relationships$state$has_many$$ManyRelationship.prototype.constructor = ember$data$lib$system$relationships$state$has_many$$ManyRelationship;
+    ember$data$lib$system$relationships$state$has_many$$ManyRelationship.prototype._super$constructor = ember$data$lib$system$relationships$state$relationship$$default;
 
-    ember$data$lib$system$relationships$relationship$$ManyRelationship.prototype.destroy = function() {
+    ember$data$lib$system$relationships$state$has_many$$ManyRelationship.prototype.destroy = function() {
       this.manyArray.destroy();
     };
 
-    ember$data$lib$system$relationships$relationship$$ManyRelationship.prototype.notifyRecordRelationshipAdded = function(record, idx) {
+    ember$data$lib$system$relationships$state$has_many$$ManyRelationship.prototype._super$addCanonicalRecord = ember$data$lib$system$relationships$state$relationship$$default.prototype.addCanonicalRecord;
+    ember$data$lib$system$relationships$state$has_many$$ManyRelationship.prototype.addCanonicalRecord = function(record, idx) {
+      if (this.canonicalMembers.has(record)) {
+        return;
+      }
+      if (idx !== undefined) {
+        this.canonicalState.splice(idx, 0, record);
+      } else {
+        this.canonicalState.push(record);
+      }
+      this._super$addCanonicalRecord(record, idx);
+    };
+
+    ember$data$lib$system$relationships$state$has_many$$ManyRelationship.prototype._super$addRecord = ember$data$lib$system$relationships$state$relationship$$default.prototype.addRecord;
+    ember$data$lib$system$relationships$state$has_many$$ManyRelationship.prototype.addRecord = function(record, idx) {
+      if (this.members.has(record)) {
+        return;
+      }
+      this._super$addRecord(record, idx);
+      this.manyArray.internalAddRecords([record], idx);
+    };
+
+    ember$data$lib$system$relationships$state$has_many$$ManyRelationship.prototype._super$removeCanonicalRecordFromOwn = ember$data$lib$system$relationships$state$relationship$$default.prototype.removeCanonicalRecordFromOwn;
+    ember$data$lib$system$relationships$state$has_many$$ManyRelationship.prototype.removeCanonicalRecordFromOwn = function(record, idx) {
+      var i = idx;
+      if (!this.canonicalMembers.has(record)) {
+        return;
+      }
+      if (i === undefined) {
+        i = this.canonicalState.indexOf(record);
+      }
+      if (i > -1) {
+        this.canonicalState.splice(i, 1);
+      }
+      this._super$removeCanonicalRecordFromOwn(record, idx);
+    };
+
+    ember$data$lib$system$relationships$state$has_many$$ManyRelationship.prototype._super$flushCanonical = ember$data$lib$system$relationships$state$relationship$$default.prototype.flushCanonical;
+    ember$data$lib$system$relationships$state$has_many$$ManyRelationship.prototype.flushCanonical = function() {
+      this.manyArray.flushCanonical();
+      this._super$flushCanonical();
+    };
+
+    ember$data$lib$system$relationships$state$has_many$$ManyRelationship.prototype._super$removeRecordFromOwn = ember$data$lib$system$relationships$state$relationship$$default.prototype.removeRecordFromOwn;
+    ember$data$lib$system$relationships$state$has_many$$ManyRelationship.prototype.removeRecordFromOwn = function(record, idx) {
+      if (!this.members.has(record)) {
+        return;
+      }
+      this._super$removeRecordFromOwn(record, idx);
+      if (idx !== undefined) {
+        //TODO(Igor) not used currently, fix
+        this.manyArray.currentState.removeAt(idx);
+      } else {
+        this.manyArray.internalRemoveRecords([record]);
+      }
+    };
+
+    ember$data$lib$system$relationships$state$has_many$$ManyRelationship.prototype.notifyRecordRelationshipAdded = function(record, idx) {
             this.record.notifyHasManyAdded(this.key, record, idx);
     };
 
-    ember$data$lib$system$relationships$relationship$$ManyRelationship.prototype.notifyRecordRelationshipRemoved = function(record) {
-      this.record.notifyHasManyRemoved(this.key, record);
-    };
-
-    ember$data$lib$system$relationships$relationship$$ManyRelationship.prototype.reload = function() {
+    ember$data$lib$system$relationships$state$has_many$$ManyRelationship.prototype.reload = function() {
       var self = this;
       if (this.link) {
         return this.fetchLink();
@@ -6346,21 +6566,22 @@
       }
     };
 
-    ember$data$lib$system$relationships$relationship$$ManyRelationship.prototype.computeChanges = function(records) {
-      var members = this.members;
+    ember$data$lib$system$relationships$state$has_many$$ManyRelationship.prototype.computeChanges = function(records) {
+      var members = this.canonicalMembers;
       var recordsToRemove = [];
       var length;
       var record;
       var i;
 
-      records = ember$data$lib$system$relationships$relationship$$setForArray(records);
+      records = ember$data$lib$system$relationships$state$has_many$$setForArray(records);
 
       members.forEach(function(member) {
-        if (member.get('isNew') || records.has(member)) return;
+        if (records.has(member)) return;
 
         recordsToRemove.push(member);
       });
-      this.removeRecords(recordsToRemove);
+
+      this.removeCanonicalRecords(recordsToRemove);
 
       var hasManyArray = this.manyArray;
 
@@ -6376,12 +6597,12 @@
         if (hasManyArray.objectAt(i) === record ) {
           continue;
         }
-        this.removeRecord(record);
-        this.addRecord(record, i);
+        this.removeCanonicalRecord(record);
+        this.addCanonicalRecord(record, i);
       }
     };
 
-    ember$data$lib$system$relationships$relationship$$ManyRelationship.prototype.fetchLink = function() {
+    ember$data$lib$system$relationships$state$has_many$$ManyRelationship.prototype.fetchLink = function() {
       var self = this;
       return this.store.findHasMany(this.record, this.link, this.relationshipMeta).then(function(records){
         self.updateRecordsFromAdapter(records);
@@ -6389,7 +6610,7 @@
       });
     };
 
-    ember$data$lib$system$relationships$relationship$$ManyRelationship.prototype.findRecords = function() {
+    ember$data$lib$system$relationships$state$has_many$$ManyRelationship.prototype.findRecords = function() {
       var manyArray = this.manyArray;
       return this.store.findMany(manyArray.toArray()).then(function(){
         //Goes away after the manyArray refactor
@@ -6397,8 +6618,12 @@
         return manyArray;
       });
     };
+    ember$data$lib$system$relationships$state$has_many$$ManyRelationship.prototype.notifyHasManyChanged = function() {
+      this.record.notifyHasManyAdded(this.key);
+    };
 
-    ember$data$lib$system$relationships$relationship$$ManyRelationship.prototype.getRecords = function() {
+    ember$data$lib$system$relationships$state$has_many$$ManyRelationship.prototype.getRecords = function() {
+      //TODO(Igor) sync server here, once our syncing is not stupid
       if (this.isAsync) {
         var self = this;
         var promise;
@@ -6415,6 +6640,7 @@
         });
       } else {
           
+        //TODO(Igor) WTF DO I DO HERE?
         if (!this.manyArray.get('isDestroyed')) {
           this.manyArray.set('isLoaded', true);
         }
@@ -6422,18 +6648,33 @@
      }
     };
 
-    var ember$data$lib$system$relationships$relationship$$BelongsToRelationship = function(store, record, inverseKey, relationshipMeta) {
+    function ember$data$lib$system$relationships$state$has_many$$setForArray(array) {
+      var set = new ember$data$lib$system$map$$OrderedSet();
+
+      if (array) {
+        for (var i=0, l=array.length; i<l; i++) {
+          set.add(array[i]);
+        }
+      }
+
+      return set;
+    }
+
+    var ember$data$lib$system$relationships$state$has_many$$default = ember$data$lib$system$relationships$state$has_many$$ManyRelationship;
+
+    var ember$data$lib$system$relationships$state$belongs_to$$BelongsToRelationship = function(store, record, inverseKey, relationshipMeta) {
       this._super$constructor(store, record, inverseKey, relationshipMeta);
       this.record = record;
       this.key = relationshipMeta.key;
       this.inverseRecord = null;
+      this.canonicalState = null;
     };
 
-    ember$data$lib$system$relationships$relationship$$BelongsToRelationship.prototype = Ember.create(ember$data$lib$system$relationships$relationship$$Relationship.prototype);
-    ember$data$lib$system$relationships$relationship$$BelongsToRelationship.prototype.constructor = ember$data$lib$system$relationships$relationship$$BelongsToRelationship;
-    ember$data$lib$system$relationships$relationship$$BelongsToRelationship.prototype._super$constructor = ember$data$lib$system$relationships$relationship$$Relationship;
+    ember$data$lib$system$relationships$state$belongs_to$$BelongsToRelationship.prototype = Ember.create(ember$data$lib$system$relationships$state$relationship$$default.prototype);
+    ember$data$lib$system$relationships$state$belongs_to$$BelongsToRelationship.prototype.constructor = ember$data$lib$system$relationships$state$belongs_to$$BelongsToRelationship;
+    ember$data$lib$system$relationships$state$belongs_to$$BelongsToRelationship.prototype._super$constructor = ember$data$lib$system$relationships$state$relationship$$default;
 
-    ember$data$lib$system$relationships$relationship$$BelongsToRelationship.prototype.setRecord = function(newRecord) {
+    ember$data$lib$system$relationships$state$belongs_to$$BelongsToRelationship.prototype.setRecord = function(newRecord) {
       if (newRecord) {
         this.addRecord(newRecord);
       } else if (this.inverseRecord) {
@@ -6441,8 +6682,41 @@
       }
     };
 
-    ember$data$lib$system$relationships$relationship$$BelongsToRelationship.prototype._super$addRecord = ember$data$lib$system$relationships$relationship$$Relationship.prototype.addRecord;
-    ember$data$lib$system$relationships$relationship$$BelongsToRelationship.prototype.addRecord = function(newRecord) {
+    ember$data$lib$system$relationships$state$belongs_to$$BelongsToRelationship.prototype.setCanonicalRecord = function(newRecord) {
+      if (newRecord) {
+        this.addCanonicalRecord(newRecord);
+      } else if (this.inverseRecord) {
+        this.removeCanonicalRecord(this.inverseRecord);
+      }
+    };
+
+    ember$data$lib$system$relationships$state$belongs_to$$BelongsToRelationship.prototype._super$addCanonicalRecord = ember$data$lib$system$relationships$state$relationship$$default.prototype.addCanonicalRecord;
+    ember$data$lib$system$relationships$state$belongs_to$$BelongsToRelationship.prototype.addCanonicalRecord = function(newRecord) {
+      if (this.canonicalMembers.has(newRecord)){ return;}
+      var type = this.relationshipMeta.type;
+      
+      if (this.canonicalState) {
+        this.removeCanonicalRecord(this.canonicalState);
+      }
+
+      this.canonicalState = newRecord;
+      this._super$addCanonicalRecord(newRecord);
+    };
+
+    ember$data$lib$system$relationships$state$belongs_to$$BelongsToRelationship.prototype._super$flushCanonical = ember$data$lib$system$relationships$state$relationship$$default.prototype.flushCanonical;
+    ember$data$lib$system$relationships$state$belongs_to$$BelongsToRelationship.prototype.flushCanonical = function() {
+      //temporary fix to not remove newly created records if server returned null.
+      //TODO remove once we have proper diffing
+      if (this.inverseRecord && this.inverseRecord.get('isNew') && !this.canonicalState) {
+        return;
+      }
+      this.inverseRecord = this.canonicalState;
+      this.record.notifyBelongsToChanged(this.key);
+      this._super$flushCanonical();
+    };
+
+    ember$data$lib$system$relationships$state$belongs_to$$BelongsToRelationship.prototype._super$addRecord = ember$data$lib$system$relationships$state$relationship$$default.prototype.addRecord;
+    ember$data$lib$system$relationships$state$belongs_to$$BelongsToRelationship.prototype.addRecord = function(newRecord) {
       if (this.members.has(newRecord)){ return;}
       var type = this.relationshipMeta.type;
       
@@ -6452,29 +6726,30 @@
 
       this.inverseRecord = newRecord;
       this._super$addRecord(newRecord);
+      this.record.notifyBelongsToChanged(this.key);
     };
 
-    ember$data$lib$system$relationships$relationship$$BelongsToRelationship.prototype.setRecordPromise = function(newPromise) {
+    ember$data$lib$system$relationships$state$belongs_to$$BelongsToRelationship.prototype.setRecordPromise = function(newPromise) {
       var content = newPromise.get && newPromise.get('content');
             this.setRecord(content);
     };
 
-    ember$data$lib$system$relationships$relationship$$BelongsToRelationship.prototype.notifyRecordRelationshipAdded = function(newRecord) {
-      this.record.notifyBelongsToAdded(this.key, this);
-    };
-
-    ember$data$lib$system$relationships$relationship$$BelongsToRelationship.prototype.notifyRecordRelationshipRemoved = function(record) {
-      this.record.notifyBelongsToRemoved(this.key, this);
-    };
-
-    ember$data$lib$system$relationships$relationship$$BelongsToRelationship.prototype._super$removeRecordFromOwn = ember$data$lib$system$relationships$relationship$$Relationship.prototype.removeRecordFromOwn;
-    ember$data$lib$system$relationships$relationship$$BelongsToRelationship.prototype.removeRecordFromOwn = function(record) {
-      if (!this.members.has(record)) { return; }
+    ember$data$lib$system$relationships$state$belongs_to$$BelongsToRelationship.prototype._super$removeRecordFromOwn = ember$data$lib$system$relationships$state$relationship$$default.prototype.removeRecordFromOwn;
+    ember$data$lib$system$relationships$state$belongs_to$$BelongsToRelationship.prototype.removeRecordFromOwn = function(record) {
+      if (!this.members.has(record)){ return;}
       this.inverseRecord = null;
       this._super$removeRecordFromOwn(record);
+      this.record.notifyBelongsToChanged(this.key);
     };
 
-    ember$data$lib$system$relationships$relationship$$BelongsToRelationship.prototype.findRecord = function() {
+    ember$data$lib$system$relationships$state$belongs_to$$BelongsToRelationship.prototype._super$removeCanonicalRecordFromOwn = ember$data$lib$system$relationships$state$relationship$$default.prototype.removeCanonicalRecordFromOwn;
+    ember$data$lib$system$relationships$state$belongs_to$$BelongsToRelationship.prototype.removeCanonicalRecordFromOwn = function(record) {
+      if (!this.canonicalMembers.has(record)){ return;}
+      this.canonicalState = null;
+      this._super$removeCanonicalRecordFromOwn(record);
+    };
+
+    ember$data$lib$system$relationships$state$belongs_to$$BelongsToRelationship.prototype.findRecord = function() {
       if (this.inverseRecord) {
         return this.store._findByRecord(this.inverseRecord);
       } else {
@@ -6482,7 +6757,7 @@
       }
     };
 
-    ember$data$lib$system$relationships$relationship$$BelongsToRelationship.prototype.fetchLink = function() {
+    ember$data$lib$system$relationships$state$belongs_to$$BelongsToRelationship.prototype.fetchLink = function() {
       var self = this;
       return this.store.findBelongsTo(this.record, this.link, this.relationshipMeta).then(function(record){
         if (record) {
@@ -6492,7 +6767,8 @@
       });
     };
 
-    ember$data$lib$system$relationships$relationship$$BelongsToRelationship.prototype.getRecord = function() {
+    ember$data$lib$system$relationships$state$belongs_to$$BelongsToRelationship.prototype.getRecord = function() {
+      //TODO(Igor) flushCanonical here once our syncing is not stupid
       if (this.isAsync) {
         var promise;
         if (this.link){
@@ -6513,53 +6789,25 @@
       }
     };
 
-    function ember$data$lib$system$relationships$relationship$$setForArray(array) {
-      var set = new ember$data$lib$system$map$$OrderedSet();
+    var ember$data$lib$system$relationships$state$belongs_to$$default = ember$data$lib$system$relationships$state$belongs_to$$BelongsToRelationship;
 
-      if (array) {
-        for (var i=0, l=array.length; i<l; i++) {
-          set.add(array[i]);
-        }
-      }
-
-      return set;
-    }
-
-    var ember$data$lib$system$relationships$relationship$$createRelationshipFor = function(record, relationshipMeta, store){
+    var ember$data$lib$system$relationships$state$create$$createRelationshipFor = function(record, relationshipMeta, store) {
       var inverseKey;
       var inverse = record.constructor.inverseFor(relationshipMeta.key);
 
       if (inverse) {
-        inverseKey = inverse.name;
-      }
+         inverseKey = inverse.name;
+       }
 
       if (relationshipMeta.kind === 'hasMany'){
-        return new ember$data$lib$system$relationships$relationship$$ManyRelationship(store, record, inverseKey, relationshipMeta);
+       return new ember$data$lib$system$relationships$state$has_many$$default(store, record, inverseKey, relationshipMeta);
       }
       else {
-        return new ember$data$lib$system$relationships$relationship$$BelongsToRelationship(store, record, inverseKey, relationshipMeta);
+       return new ember$data$lib$system$relationships$state$belongs_to$$default(store, record, inverseKey, relationshipMeta);
       }
     };
 
-
-    function ember$data$lib$system$merge$$merge(original, updates) {
-      if (!updates || typeof updates !== 'object') {
-        return original;
-      }
-
-      var props = Ember.keys(updates);
-      var prop;
-      var length = props.length;
-
-      for (var i = 0; i < length; i++) {
-        prop = props[i];
-        original[prop] = updates[prop];
-      }
-
-      return original;
-    }
-
-    var ember$data$lib$system$merge$$default = ember$data$lib$system$merge$$merge;
+    var ember$data$lib$system$relationships$state$create$$default = ember$data$lib$system$relationships$state$create$$createRelationshipFor;
 
     /**
       @module ember-data
@@ -7024,7 +7272,7 @@
         var model = this;
         //TODO Move into a getter for better perf
         this.constructor.eachRelationship(function(key, descriptor) {
-            model._relationships[key] = ember$data$lib$system$relationships$relationship$$createRelationshipFor(model, descriptor, model.store);
+            model._relationships[key] = ember$data$lib$system$relationships$state$create$$default(model, descriptor, model.store);
         });
 
       },
@@ -7421,16 +7669,10 @@
         @method setupData
         @private
         @param {Object} data
-        @param {Boolean} partial the data should be merged into
-          the existing data, not replace it.
       */
-      setupData: function(data, partial) {
+      setupData: function(data) {
         
-        if (partial) {
-          ember$data$lib$system$merge$$default(this._data, data);
-        } else {
-          this._data = data;
-        }
+        Ember.merge(this._data, data);
 
         this.pushedData();
 
@@ -7972,6 +8214,49 @@
       }).meta(meta);
     }
     var ember$data$lib$system$model$attributes$$default = ember$data$lib$system$model$attributes$$attr;
+    //Stanley told me to do this
+    var ember$data$lib$system$store$$Backburner = Ember.__loader.require('backburner')['default'] || Ember.__loader.require('backburner')['Backburner'];
+
+    //Shim Backburner.join
+    if (!ember$data$lib$system$store$$Backburner.prototype.join) {
+      var ember$data$lib$system$store$$isString = function(suspect) {
+        return typeof suspect === 'string';
+      };
+
+      ember$data$lib$system$store$$Backburner.prototype.join = function(/*target, method, args */) {
+        var method, target;
+
+        if (this.currentInstance) {
+          var length = arguments.length;
+          if (length === 1) {
+            method = arguments[0];
+            target = null;
+          } else {
+            target = arguments[0];
+            method = arguments[1];
+          }
+
+          if (ember$data$lib$system$store$$isString(method)) {
+            method = target[method];
+          }
+
+          if (length === 1) {
+            return method();
+          } else if (length === 2) {
+            return method.call(target);
+          } else {
+            var args = new Array(length - 2);
+            for (var i =0, l = length - 2; i < l; i++) {
+              args[i] = arguments[i + 2];
+            }
+            return method.apply(target, args);
+          }
+        } else {
+          return this.run.apply(this, arguments);
+        }
+      };
+    }
+
 
     var ember$data$lib$system$store$$get = Ember.get;
     var ember$data$lib$system$store$$set = Ember.set;
@@ -8045,7 +8330,7 @@
       You can learn more about writing a custom adapter by reading the `DS.Adapter`
       documentation.
 
-      ### Store createRecord() vs. push() vs. pushPayload() vs. update()
+      ### Store createRecord() vs. push() vs. pushPayload()
 
       The store provides multiple ways to create new record objects. They have
       some subtle differences in their use which are detailed below:
@@ -8058,7 +8343,7 @@
       [push](#method_push) is used to notify Ember Data's store of new or
       updated records that exist in the backend. This will return a record
       in the `loaded.saved` state. The primary use-case for `store#push` is
-      to notify Ember Data about record updates that happen
+      to notify Ember Data about record updates (full or partial) that happen
       outside of the normal adapter methods (for example
       [SSE](http://dev.w3.org/html5/eventsource/) or [Web
       Sockets](http://www.w3.org/TR/2009/WD-websockets-20091222/)).
@@ -8066,10 +8351,6 @@
       [pushPayload](#method_pushPayload) is a convenience wrapper for
       `store#push` that will deserialize payloads if the
       Serializer implements a `pushPayload` method.
-
-      [update](#method_update) works like `push`, except it can handle
-      partial attributes without overwriting the existing record
-      properties.
 
       Note: When creating a new record using any of the above methods
       Ember Data will update `DS.RecordArray`s such as those returned by
@@ -8089,6 +8370,7 @@
         @private
       */
       init: function() {
+        this._backburner = new ember$data$lib$system$store$$Backburner(['normalizeRelationships', 'syncRelationships', 'finished']);
         // internal bookkeeping; not observable
         this.typeMaps = {};
         this.recordArrayManager = ember$data$lib$system$record_array_manager$$default.create({
@@ -8376,8 +8658,10 @@
         This method returns a fresh record for a given type and id combination.
 
         If a record is available for the given type/id combination, then
-        it will fetch this record from the store then reload it. If
-        there's no record corresponding in the store it will simply call
+        it will fetch this record from the store and call `reload()` on it.
+        That will fire a request to server and return a promise that will
+        resolve once the record has been reloaded.
+        If there's no record corresponding in the store it will simply call
         `store.find`.
 
         Example
@@ -8933,7 +9217,6 @@
 
         promise = promise || ember$data$lib$system$store$$Promise.cast(array);
 
-
         return ember$data$lib$system$promise_proxies$$promiseArray(promise.then(function() {
           return array;
         }, null, "DS: Store#filter of " + type));
@@ -8967,12 +9250,25 @@
         This method returns the metadata for a specific type.
 
         @method metadataFor
-        @param {String or subclass of DS.Model} type
+        @param {String or subclass of DS.Model} typeName
         @return {object}
       */
-      metadataFor: function(type) {
-        type = this.modelFor(type);
+      metadataFor: function(typeName) {
+        var type = this.modelFor(typeName);
         return this.typeMapFor(type).metadata;
+      },
+
+      /**
+        This method sets the metadata for a specific type.
+
+        @method setMetadataFor
+        @param {String or subclass of DS.Model} typeName
+        @param {Object} metadata metadata to set
+        @return {object}
+      */
+      setMetadataFor: function(typeName, metadata) {
+        var type = this.modelFor(typeName);
+        Ember.merge(this.typeMapFor(type).metadata, metadata);
       },
 
       // ............
@@ -9063,12 +9359,12 @@
       didSaveRecord: function(record, data) {
         if (data) {
           // normalize relationship IDs into records
-          data = ember$data$lib$system$store$$normalizeRelationships(this, record.constructor, data, record);
-          ember$data$lib$system$store$$setupRelationships(this, record, data);
-
+          this._backburner.schedule('normalizeRelationships', this, '_setupRelationships', record, record.constructor, data);
           this.updateId(record, data);
         }
 
+        //We first make sure the primary data has been updated
+        //TODO try to move notification to the user to the end of the runloop
         record.adapterDidCommit(data);
       },
 
@@ -9159,14 +9455,12 @@
         @private
         @param {String or subclass of DS.Model} type
         @param {Object} data
-        @param {Boolean} partial the data should be merged into
-          the existing data, not replace it.
       */
-      _load: function(type, data, partial) {
+      _load: function(type, data) {
         var id = ember$data$lib$system$store$$coerceId(data.id);
         var record = this.recordForId(type, id);
 
-        record.setupData(data, partial);
+        record.setupData(data);
         this.recordArrayManager.recordDidChange(record);
 
         return record;
@@ -9273,14 +9567,27 @@
         @return {DS.Model} the record that was created or
           updated.
       */
-      push: function(typeName, data, _partial) {
-        // _partial is an internal param used by `update`.
-        // If passed, it means that the data should be
-        // merged into the existing data, not replace it.
+      push: function(typeName, data) {
                 
         var type = this.modelFor(typeName);
         var filter = Ember.EnumerableUtils.filter;
 
+        
+        // Actually load the record into the store.
+
+        this._load(type, data);
+
+        var record = this.recordForId(type, data.id);
+        var store = this;
+
+        this._backburner.join(function() {
+          store._backburner.schedule('normalizeRelationships', store, '_setupRelationships', record, type, data);
+        });
+
+        return record;
+      },
+
+      _setupRelationships: function(record, type, data) {
         // If the payload contains relationships that are specified as
         // IDs, normalizeRelationships will convert them into DS.Model instances
         // (possibly unloaded) before we push the payload into the
@@ -9288,19 +9595,11 @@
 
         data = ember$data$lib$system$store$$normalizeRelationships(this, type, data);
 
-        
-        // Actually load the record into the store.
-
-        this._load(type, data, _partial);
-
-        var record = this.recordForId(type, data.id);
 
         // Now that the pushed record as well as any related records
         // are in the store, create the data structures used to track
         // relationships.
         ember$data$lib$system$store$$setupRelationships(this, record, data);
-
-        return record;
       },
 
       /**
@@ -9357,7 +9656,10 @@
           payload = inputPayload;
           serializer = this.serializerFor(type);
         }
-        serializer.pushPayload(this, payload);
+        var store = this;
+        ember$data$lib$system$store$$_adapterRun(this, function() {
+          serializer.pushPayload(store, payload);
+        });
       },
 
       /**
@@ -9386,39 +9688,14 @@
       },
 
       /**
-        Update existing records in the store. Unlike [push](#method_push),
-        update will merge the new data properties with the existing
-        properties. This makes it safe to use with a subset of record
-        attributes. This method expects normalized data.
-
-        `update` is useful if your app broadcasts partial updates to
-        records.
-
-        ```js
-        App.Person = DS.Model.extend({
-          firstName: DS.attr('string'),
-          lastName: DS.attr('string')
-        });
-
-        store.get('person', 1).then(function(tom) {
-          tom.get('firstName'); // Tom
-          tom.get('lastName'); // Dale
-
-          var updateEvent = {id: 1, firstName: "TomHuda"};
-          store.update('person', updateEvent);
-
-          tom.get('firstName'); // TomHuda
-          tom.get('lastName'); // Dale
-        });
-        ```
-
         @method update
         @param {String} type
         @param {Object} data
         @return {DS.Model} the record that was updated.
+        @deprecated Use [push](#method_push) instead
       */
       update: function(type, data) {
-        return this.push(type, data, true);
+                return this.push(type, data);
       },
 
       /**
@@ -9443,17 +9720,13 @@
       },
 
       /**
-        If you have some metadata to set for a type
-        you can call `metaForType`.
-
         @method metaForType
-        @param {String or subclass of DS.Model} type
+        @param {String or subclass of DS.Model} typeName
         @param {Object} metadata
+        @deprecated Use [setMetadataFor](#method_setMetadataFor) instead
       */
       metaForType: function(typeName, metadata) {
-        var type = this.modelFor(typeName);
-
-        Ember.merge(this.typeMapFor(type).metadata, metadata);
+                this.setMetadataFor(typeName, metadata);
       },
 
       /**
@@ -9698,6 +9971,10 @@
       return guarded;
     }
 
+    function ember$data$lib$system$store$$_adapterRun(store, fn) {
+      return store._backburner.run(fn);
+    }
+
     function ember$data$lib$system$store$$_bind(fn) {
       var args = Array.prototype.slice.call(arguments, 1);
 
@@ -9715,9 +9992,11 @@
       promise = ember$data$lib$system$store$$_guard(promise, ember$data$lib$system$store$$_bind(ember$data$lib$system$store$$_objectIsAlive, store));
 
       return promise.then(function(adapterPayload) {
-                var payload = serializer.extract(store, type, adapterPayload, id, 'find');
+                return ember$data$lib$system$store$$_adapterRun(store, function() {
+          var payload = serializer.extract(store, type, adapterPayload, id, 'find');
 
-        return store.push(type, payload);
+          return store.push(type, payload);
+        });
       }, function(error) {
         var record = store.getById(type, id);
         if (record) {
@@ -9741,10 +10020,12 @@
       promise = ember$data$lib$system$store$$_guard(promise, ember$data$lib$system$store$$_bind(ember$data$lib$system$store$$_objectIsAlive, store));
 
       return promise.then(function(adapterPayload) {
-        var payload = serializer.extract(store, type, adapterPayload, null, 'findMany');
+        return ember$data$lib$system$store$$_adapterRun(store, function() {
+          var payload = serializer.extract(store, type, adapterPayload, null, 'findMany');
 
-        
-        return store.pushMany(type, payload);
+          
+          return store.pushMany(type, payload);
+        });
       }, null, "DS: Extract payload of " + type);
     }
 
@@ -9758,11 +10039,13 @@
       promise = ember$data$lib$system$store$$_guard(promise, ember$data$lib$system$store$$_bind(ember$data$lib$system$store$$_objectIsAlive, record));
 
       return promise.then(function(adapterPayload) {
-        var payload = serializer.extract(store, relationship.type, adapterPayload, null, 'findHasMany');
+        return ember$data$lib$system$store$$_adapterRun(store, function() {
+          var payload = serializer.extract(store, relationship.type, adapterPayload, null, 'findHasMany');
 
-        
-        var records = store.pushMany(relationship.type, payload);
-        return records;
+          
+          var records = store.pushMany(relationship.type, payload);
+          return records;
+        });
       }, null, "DS: Extract payload of " + record + " : hasMany " + relationship.type);
     }
 
@@ -9776,14 +10059,16 @@
       promise = ember$data$lib$system$store$$_guard(promise, ember$data$lib$system$store$$_bind(ember$data$lib$system$store$$_objectIsAlive, record));
 
       return promise.then(function(adapterPayload) {
-        var payload = serializer.extract(store, relationship.type, adapterPayload, null, 'findBelongsTo');
+        return ember$data$lib$system$store$$_adapterRun(store, function() {
+          var payload = serializer.extract(store, relationship.type, adapterPayload, null, 'findBelongsTo');
 
-        if (!payload) {
-          return null;
-        }
+          if (!payload) {
+            return null;
+          }
 
-        var record = store.push(relationship.type, payload);
-        return record;
+          var record = store.push(relationship.type, payload);
+          return record;
+        });
       }, null, "DS: Extract payload of " + record + " : " + relationship.type);
     }
 
@@ -9796,10 +10081,13 @@
       promise = ember$data$lib$system$store$$_guard(promise, ember$data$lib$system$store$$_bind(ember$data$lib$system$store$$_objectIsAlive, store));
 
       return promise.then(function(adapterPayload) {
-        var payload = serializer.extract(store, type, adapterPayload, null, 'findAll');
+        ember$data$lib$system$store$$_adapterRun(store, function() {
+          var payload = serializer.extract(store, type, adapterPayload, null, 'findAll');
 
-        
-        store.pushMany(type, payload);
+          
+          store.pushMany(type, payload);
+        });
+
         store.didUpdateAll(type);
         return store.all(type);
       }, null, "DS: Extract payload of findAll " + type);
@@ -9814,11 +10102,15 @@
       promise = ember$data$lib$system$store$$_guard(promise, ember$data$lib$system$store$$_bind(ember$data$lib$system$store$$_objectIsAlive, store));
 
       return promise.then(function(adapterPayload) {
-        var payload = serializer.extract(store, type, adapterPayload, null, 'findQuery');
+        var payload;
+        ember$data$lib$system$store$$_adapterRun(store, function() {
+          payload = serializer.extract(store, type, adapterPayload, null, 'findQuery');
 
-        
+                  });
+
         recordArray.load(payload);
         return recordArray;
+
       }, null, "DS: Extract payload of findQuery " + type);
     }
 
@@ -9836,13 +10128,15 @@
       return promise.then(function(adapterPayload) {
         var payload;
 
-        if (adapterPayload) {
-          payload = serializer.extract(store, type, adapterPayload, ember$data$lib$system$store$$get(record, 'id'), operation);
-        } else {
-          payload = adapterPayload;
-        }
+        ember$data$lib$system$store$$_adapterRun(store, function() {
+          if (adapterPayload) {
+            payload = serializer.extract(store, type, adapterPayload, ember$data$lib$system$store$$get(record, 'id'), operation);
+          } else {
+            payload = adapterPayload;
+          }
+          store.didSaveRecord(record, payload);
+        });
 
-        store.didSaveRecord(record, payload);
         return record;
       }, function(reason) {
         if (reason instanceof ember$data$lib$system$adapter$$InvalidError) {
@@ -9873,7 +10167,7 @@
           if (value === undefined) {
             return;
           }
-          relationship.setRecord(value);
+          relationship.setCanonicalRecord(value);
         } else if (kind === 'hasMany' && value) {
          relationship.updateRecordsFromAdapter(value);
         }
@@ -10919,11 +11213,22 @@
       });
       ```
 
+      You can avoid passing a string as the first parameter. In that case Ember Data
+      will infer the type from the key name.
+
+      ```javascript
+      App.Comment = DS.Model.extend({
+        post: DS.belongsTo()
+      });
+      ```
+
+      will lookup for a Post type.
+
       @namespace
       @method belongsTo
       @for DS
-      @param {String} type the model type of the relationship
-      @param {Object} options a hash of options
+      @param {String} type (optional) type of the relationship
+      @param {Object} options (optional) a hash of options
       @return {Ember.computed} relationship
     */
     function ember$data$lib$system$relationships$belongs_to$$belongsTo(type, options) {
@@ -10967,11 +11272,7 @@
       @namespace DS
     */
     ember$data$lib$system$model$model$$default.reopen({
-      notifyBelongsToAdded: function(key, relationship) {
-        this.notifyPropertyChange(key);
-      },
-
-      notifyBelongsToRemoved: function(key) {
+      notifyBelongsToChanged: function(key) {
         this.notifyPropertyChange(key);
       }
     });
@@ -11016,6 +11317,17 @@
       });
       ```
 
+      You can avoid passing a string as the first parameter. In that case Ember Data
+      will infer the type from the singularized key name.
+
+      ```javascript
+      App.Post = DS.Model.extend({
+        tags: DS.hasMany()
+      });
+      ```
+
+      will lookup for a Tag type.
+
       #### Explicit Inverses
 
       Ember Data will do its best to discover which relationships map to
@@ -11052,8 +11364,8 @@
       @namespace
       @method hasMany
       @for DS
-      @param {String} type the model type of the relationship
-      @param {Object} options a hash of options
+      @param {String} type (optional) type of the relationship
+      @param {Object} options (optional) a hash of options
       @return {Ember.computed} relationship
     */
     function ember$data$lib$system$relationships$has_many$$hasMany(type, options) {
@@ -11084,21 +11396,14 @@
     }
 
     ember$data$lib$system$model$model$$default.reopen({
-      notifyHasManyAdded: function(key, record, idx) {
-        var relationship = this._relationships[key];
-        var manyArray = relationship.manyArray;
-        manyArray.addRecord(record, idx);
+      notifyHasManyAdded: function(key) {
         //We need to notifyPropertyChange in the adding case because we need to make sure
         //we fetch the newly added record in case it is unloaded
         //TODO(Igor): Consider whether we could do this only if the record state is unloaded
+
+        //Goes away once hasMany is double promisified
         this.notifyPropertyChange(key);
       },
-
-      notifyHasManyRemoved: function(key, record) {
-        var relationship = this._relationships[key];
-        var manyArray = relationship.manyArray;
-        manyArray.removeRecord(record);
-      }
     });
 
 
@@ -11703,6 +12008,8 @@
     ember$data$lib$core$$default.PromiseArray  = ember$data$lib$system$promise_proxies$$PromiseArray;
     ember$data$lib$core$$default.PromiseObject = ember$data$lib$system$promise_proxies$$PromiseObject;
 
+    ember$data$lib$core$$default.PromiseManyArray = ember$data$lib$system$promise_proxies$$PromiseManyArray;
+
     ember$data$lib$core$$default.Model     = ember$data$lib$system$model$model$$default;
     ember$data$lib$core$$default.RootState = ember$data$lib$system$model$states$$default;
     ember$data$lib$core$$default.attr      = ember$data$lib$system$model$attributes$$default;
@@ -11739,7 +12046,7 @@
     ember$data$lib$core$$default.belongsTo = ember$data$lib$system$relationships$belongs_to$$default;
     ember$data$lib$core$$default.hasMany   = ember$data$lib$system$relationships$has_many$$default;
 
-    ember$data$lib$core$$default.Relationship  = ember$data$lib$system$relationships$relationship$$Relationship;
+    ember$data$lib$core$$default.Relationship  = ember$data$lib$system$relationships$state$relationship$$default;
 
     ember$data$lib$core$$default.ContainerProxy = ember$data$lib$system$container_proxy$$default;
 
