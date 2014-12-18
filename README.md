@@ -1,12 +1,20 @@
-Ember Data
+Ember Data Custom Build
 ==========
 
-Shim repository for the [Ember.js Data](http://github.com/emberjs/data) component.
+Clone this repo into the root of an ember-data clone:
 
+```
+git clone git@github.com:emberjs/data.git ember-data \
+  && cd ember-data \
+  && git clone git@github.com:franq/ember-data-build.git builds
+```
 
-Package Managers
-----------------
+When you want to create a custom build:
 
-* [Bower](http://bower.io): `ember-data`
-* [Component](http://component.io): `components/ember-data`
-* [Composer](http://packagist.org/packages/components/ember): `components/ember-data`
+```
+# choose an appropriate version number
+version="v1.0.0-beta.12b"
+cd builds \
+  && ./bin/update.sh $version \
+  && git push --tags
+```
