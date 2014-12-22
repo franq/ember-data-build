@@ -4446,13 +4446,18 @@
       A PromiseManyArray is a PromiseArray that also proxies certain method calls
       to the underlying manyArray.
       Right now we proxy:
-        `reload()`
-        `createRecord()`
-        `on()`
-        `one()`
-        `trigger()`
-        `off()`
-        `has()`
+
+        * `reload()`
+        * `createRecord()`
+        * `on()`
+        * `one()`
+        * `trigger()`
+        * `off()`
+        * `has()`
+
+      @class PromiseManyArray
+      @namespace DS
+      @extends Ember.ArrayProxy
     */
 
     function ember$data$lib$system$promise_proxies$$proxyToContent(method) {
@@ -4866,10 +4871,10 @@
         if (!objects) {
           objects = [];
         }
-        this.arrayContentWillChange(idx, 0, objects.length);
+        this.arrayContentWillChange(idx, amt, objects.length);
         this.currentState.splice.apply(this.currentState, [idx, amt].concat(objects));
         this.set('length', this.currentState.length);
-        this.arrayContentDidChange(idx, 0, objects.length);
+        this.arrayContentDidChange(idx, amt, objects.length);
         if (objects){
           //TODO(Igor) probably needed only for unloaded records
           this.relationship.notifyHasManyChanged();
@@ -6550,7 +6555,9 @@
     };
 
     ember$data$lib$system$relationships$state$has_many$$ManyRelationship.prototype.notifyRecordRelationshipAdded = function(record, idx) {
-            this.record.notifyHasManyAdded(this.key, record, idx);
+      var type = this.relationshipMeta.type;
+      
+      this.record.notifyHasManyAdded(this.key, record, idx);
     };
 
     ember$data$lib$system$relationships$state$has_many$$ManyRelationship.prototype.reload = function() {
@@ -7708,6 +7715,8 @@
         @method rollback
       */
       rollback: function() {
+        var dirtyKeys = Ember.keys(this._attributes);
+
         this._attributes = Ember.create(null);
 
         if (ember$data$lib$system$model$model$$get(this, 'isError')) {
@@ -7732,8 +7741,7 @@
 
         this.send('rolledBack');
 
-        this._notifyProperties(Ember.keys(this._data));
-
+        this._notifyProperties(dirtyKeys);
       },
 
       toStringExtension: function() {
@@ -9572,7 +9580,11 @@
         var type = this.modelFor(typeName);
         var filter = Ember.EnumerableUtils.filter;
 
-        
+        // If the payload contains unused keys log a warning.
+        // Adding `Ember.ENV.DS_NO_WARN_ON_UNUSED_KEYS = true` will suppress the warning.
+        if (!Ember.ENV.DS_NO_WARN_ON_UNUSED_KEYS) {
+                  }
+
         // Actually load the record into the store.
 
         this._load(type, data);

@@ -4464,13 +4464,18 @@
       A PromiseManyArray is a PromiseArray that also proxies certain method calls
       to the underlying manyArray.
       Right now we proxy:
-        `reload()`
-        `createRecord()`
-        `on()`
-        `one()`
-        `trigger()`
-        `off()`
-        `has()`
+
+        * `reload()`
+        * `createRecord()`
+        * `on()`
+        * `one()`
+        * `trigger()`
+        * `off()`
+        * `has()`
+
+      @class PromiseManyArray
+      @namespace DS
+      @extends Ember.ArrayProxy
     */
 
     function ember$data$lib$system$promise_proxies$$proxyToContent(method) {
@@ -4885,10 +4890,10 @@
         if (!objects) {
           objects = [];
         }
-        this.arrayContentWillChange(idx, 0, objects.length);
+        this.arrayContentWillChange(idx, amt, objects.length);
         this.currentState.splice.apply(this.currentState, [idx, amt].concat(objects));
         this.set('length', this.currentState.length);
-        this.arrayContentDidChange(idx, 0, objects.length);
+        this.arrayContentDidChange(idx, amt, objects.length);
         if (objects){
           //TODO(Igor) probably needed only for unloaded records
           this.relationship.notifyHasManyChanged();
@@ -6574,7 +6579,17 @@
     };
 
     ember$data$lib$system$relationships$state$has_many$$ManyRelationship.prototype.notifyRecordRelationshipAdded = function(record, idx) {
-      Ember.assert("You cannot add '" + record.constructor.typeKey + "' records to this relationship (only '" + this.belongsToType.typeKey + "' allowed)", !this.belongsToType || record instanceof this.belongsToType);
+      var type = this.relationshipMeta.type;
+      Ember.assert("You cannot add '" + record.constructor.typeKey + "' records to the " + this.record.constructor.typeKey + "." + this.key + " relationship (only '" + this.belongsToType.typeKey + "' allowed)", (function () {
+        if (record instanceof type) {
+          return true;
+        } else if (Ember.MODEL_FACTORY_INJECTIONS) {
+          return record instanceof type.superclass;
+        }
+
+        return false;
+      })());
+
       this.record.notifyHasManyAdded(this.key, record, idx);
     };
 
@@ -6746,7 +6761,15 @@
     ember$data$lib$system$relationships$state$belongs_to$$BelongsToRelationship.prototype.addRecord = function(newRecord) {
       if (this.members.has(newRecord)){ return;}
       var type = this.relationshipMeta.type;
-      Ember.assert("You can only add a '" + type.typeKey + "' record to this relationship", newRecord instanceof type);
+      Ember.assert("You can only add a '" + type.typeKey + "' record to this relationship", (function () {
+        if (newRecord instanceof type) {
+          return true;
+        } else if (Ember.MODEL_FACTORY_INJECTIONS) {
+          return newRecord instanceof type.superclass;
+        }
+
+        return false;
+      })());
 
       if (this.inverseRecord) {
         this.removeRecord(this.inverseRecord);
@@ -7741,6 +7764,8 @@
         @method rollback
       */
       rollback: function() {
+        var dirtyKeys = Ember.keys(this._attributes);
+
         this._attributes = Ember.create(null);
 
         if (ember$data$lib$system$model$model$$get(this, 'isError')) {
@@ -7765,8 +7790,7 @@
 
         this.send('rolledBack');
 
-        this._notifyProperties(Ember.keys(this._data));
-
+        this._notifyProperties(dirtyKeys);
       },
 
       toStringExtension: function() {
@@ -9628,14 +9652,18 @@
         var type = this.modelFor(typeName);
         var filter = Ember.EnumerableUtils.filter;
 
-        Ember.warn("The payload for '" + type.typeKey + "' contains these unknown keys: " +
-          Ember.inspect(filter(Ember.keys(data), function(key) {
-            return !ember$data$lib$system$store$$get(type, 'fields').has(key) && key !== 'id' && key !== 'links';
-          })) + ". Make sure they've been defined in your model.",
-          filter(Ember.keys(data), function(key) {
-            return !ember$data$lib$system$store$$get(type, 'fields').has(key) && key !== 'id' && key !== 'links';
-          }).length === 0
-        );
+        // If the payload contains unused keys log a warning.
+        // Adding `Ember.ENV.DS_NO_WARN_ON_UNUSED_KEYS = true` will suppress the warning.
+        if (!Ember.ENV.DS_NO_WARN_ON_UNUSED_KEYS) {
+          Ember.warn("The payload for '" + type.typeKey + "' contains these unknown keys: " +
+            Ember.inspect(filter(Ember.keys(data), function(key) {
+              return !ember$data$lib$system$store$$get(type, 'fields').has(key) && key !== 'id' && key !== 'links';
+            })) + ". Make sure they've been defined in your model.",
+            filter(Ember.keys(data), function(key) {
+              return !ember$data$lib$system$store$$get(type, 'fields').has(key) && key !== 'id' && key !== 'links';
+            }).length === 0
+          );
+        }
 
         // Actually load the record into the store.
 
