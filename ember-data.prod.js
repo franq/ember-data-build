@@ -4352,12 +4352,12 @@
     /**
       @property VERSION
       @type String
-      @default '<%= versionStamp %>'
+      @default '1.0.0-beta.13b'
       @static
     */
     /*jshint -W079 */
     var ember$data$lib$core$$DS = Ember.Namespace.create({
-      VERSION: '<%= versionStamp %>'
+      VERSION: '1.0.0-beta.13b'
     });
 
     if (Ember.libraries) {
