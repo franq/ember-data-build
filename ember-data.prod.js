@@ -910,7 +910,7 @@
 
         will also send a request to: `GET /comments?ids[]=1&ids[]=2`
 
-        Note: Requests coalescing rely on URL building strategy. So if you override `buildUrl` in your app
+        Note: Requests coalescing rely on URL building strategy. So if you override `buildURL` in your app
         `groupRecordsForFindMany` more likely should be overridden as well in order for coalescing to work.
 
         @property coalesceFindRequests
@@ -2048,7 +2048,7 @@
       The ActiveModelAdapter is a subclass of the RESTAdapter designed to integrate
       with a JSON API that uses an underscored naming convention instead of camelCasing.
       It has been designed to work out of the box with the
-      [active_model_serializers](http://github.com/rails-api/active_model_serializers)
+      [active\_model\_serializers](http://github.com/rails-api/active_model_serializers)
       Ruby gem. This Adapter expects specific settings using ActiveModel::Serializers,
       `embed :ids, embed_in_root: true` which sideloads the records.
 
@@ -4004,7 +4004,7 @@
       The ActiveModelSerializer is a subclass of the RESTSerializer designed to integrate
       with a JSON API that uses an underscored naming convention instead of camelCasing.
       It has been designed to work out of the box with the
-      [active_model_serializers](http://github.com/rails-api/active_model_serializers)
+      [active\_model\_serializers](http://github.com/rails-api/active_model_serializers)
       Ruby gem. This Serializer expects specific settings using ActiveModel::Serializers,
       `embed :ids, embed_in_root: true` which sideloads the records.
 
@@ -4352,12 +4352,12 @@
     /**
       @property VERSION
       @type String
-      @default '1.0.0-beta.13b'
+      @default '1.0.0-beta.14.1'
       @static
     */
     /*jshint -W079 */
     var ember$data$lib$core$$DS = Ember.Namespace.create({
-      VERSION: '1.0.0-beta.13b'
+      VERSION: '1.0.0-beta.14.1'
     });
 
     if (Ember.libraries) {
@@ -4496,6 +4496,7 @@
 
 
     var ember$data$lib$system$record_arrays$record_array$$get = Ember.get;
+    var ember$data$lib$system$record_arrays$record_array$$set = Ember.set;
 
     var ember$data$lib$system$record_arrays$record_array$$default = Ember.ArrayProxy.extend(Ember.Evented, {
       /**
@@ -4625,8 +4626,6 @@
       pushRecord: function(record) {
         ember$data$lib$system$record_arrays$record_array$$get(this, 'content').pushObject(record);
       },
-
-
       /**
         Removes a record to the `RecordArray`.
 
@@ -4690,6 +4689,7 @@
       willDestroy: function(){
         this._unregisterFromManager();
         this._dissociateFromOwnRecords();
+        ember$data$lib$system$record_arrays$record_array$$set(this, 'content', undefined);
         this._super();
       }
     });
@@ -6030,7 +6030,7 @@
         record. This is useful for displaying all errors to the user.
 
         ```handlebars
-        {{#each errors.messages}}
+        {{#each message in errors.messages}}
           <div class="error">
             {{message}}
           </div>
@@ -12008,7 +12008,6 @@
     });
     /**
       Ember Data
-
       @module ember-data
       @main ember-data
     */
@@ -12016,6 +12015,7 @@
     // support RSVP 2.x via resolve,  but prefer RSVP 3.x's Promise.cast
     Ember.RSVP.Promise.cast = Ember.RSVP.Promise.cast || Ember.RSVP.resolve;
 
+    
     ember$data$lib$core$$default.Store         = ember$data$lib$system$store$$Store;
     ember$data$lib$core$$default.PromiseArray  = ember$data$lib$system$promise_proxies$$PromiseArray;
     ember$data$lib$core$$default.PromiseObject = ember$data$lib$system$promise_proxies$$PromiseObject;
@@ -12068,5 +12068,3 @@
 
     var ember$data$lib$main$$default = ember$data$lib$core$$default;
 }).call(this);
-
-//# sourceMappingURL=ember-data.js.map
